@@ -210,10 +210,12 @@ function buildSessionTimeline(parsedLines) {
       for (const block of content) {
         if (block.type === 'thinking') continue; // skip thinking blocks
         if (block.type === 'text' && block.text?.trim()) {
+          const cleaned = stripTags(block.text);
+          if (cleaned.length < 3) continue; // skip empty/trivial
           timeline.push({
             type: 'assistant_text',
             timestamp: entry.timestamp,
-            content: stripTags(block.text).slice(0, 300),
+            content: cleaned,
             lineIndex: i,
           });
         } else if (block.type === 'tool_use') {
@@ -239,23 +241,30 @@ function buildSessionTimeline(parsedLines) {
       }
     } else if (role === 'user') {
       if (typeof content === 'string') {
-        timeline.push({
-          type: 'user_text',
-          timestamp: entry.timestamp,
-          content: content.slice(0, 300),
-          lineIndex: i,
-        });
+        const cleaned = stripTags(content);
+        if (cleaned.length >= 3) {
+          timeline.push({
+            type: 'user_text',
+            timestamp: entry.timestamp,
+            content: cleaned,
+            lineIndex: i,
+          });
+        }
       } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === 'text') {
+            const cleaned = stripTags(block.text || '');
+            // Skip system-injected text (system reminders, command tags, etc.)
+            if (cleaned.length < 3) continue;
+            if (/^(SessionStart|currentDate|Today|The following|As you answer)/i.test(cleaned)) continue;
             timeline.push({
               type: 'user_text',
               timestamp: entry.timestamp,
-              content: stripTags(block.text || '').slice(0, 300),
+              content: cleaned,
               lineIndex: i,
             });
           } else if (block.type === 'tool_result') {
-            // Check if this is an AskUserQuestion response
+            // Only keep AskUserQuestion responses; skip all other tool results (noise)
             if (entry.toolUseResult) {
               timeline.push({
                 type: 'user_answer',
@@ -264,18 +273,8 @@ function buildSessionTimeline(parsedLines) {
                 answers: entry.toolUseResult.answers || {},
                 lineIndex: i,
               });
-            } else {
-              const resultSnippet = typeof block.content === 'string'
-                ? block.content.slice(0, 120)
-                : '[tool result]';
-              timeline.push({
-                type: 'tool_result',
-                timestamp: entry.timestamp,
-                content: resultSnippet,
-                isError: block.is_error || false,
-                lineIndex: i,
-              });
             }
+            // tool_result entries (Bash output, file reads, etc.) are omitted — they're noise
           }
         }
       }
@@ -294,19 +293,6 @@ function summarizeToolInput(block) {
   if (input.url) return input.url;
   if (input.content) return input.content.slice(0, 120);
   return JSON.stringify(input).slice(0, 120);
-}
-
-// ─── What Happened Next ─────────────────────────────────────────────────────
-
-function getWhatHappenedNext(timeline, answerTimelineIdx) {
-  const next = [];
-  for (let i = answerTimelineIdx + 1; i < timeline.length && next.length < 3; i++) {
-    const entry = timeline[i];
-    if (entry.type === 'assistant_text' || entry.type === 'tool_use') {
-      next.push(entry);
-    }
-  }
-  return next;
 }
 
 // ─── Data Transformation ─────────────────────────────────────────────────────
@@ -494,29 +480,53 @@ body {
   color: white;
 }
 
-.what-next-content {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.3s ease;
+/* Conversation entries (tier 2) */
+.conv-entry {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  transition: border-color 0.15s ease;
 }
-.what-next-content.expanded {
-  max-height: 500px;
+.conv-entry:hover {
+  border-color: color-mix(in srgb, var(--text-muted) 40%, transparent);
+}
+.conv-entry .conv-body {
+  overflow: hidden;
+  position: relative;
+}
+.conv-entry .conv-body.truncated {
+  max-height: 4.5em;
+}
+.conv-entry .conv-body.truncated::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2em;
+  background: linear-gradient(transparent, var(--bg-surface));
+  pointer-events: none;
+}
+.conv-entry .conv-body.expanded {
+  max-height: 400px;
+  overflow-y: auto;
+}
+.conv-entry .conv-body.expanded::-webkit-scrollbar { width: 4px; }
+.conv-entry .conv-body.expanded::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.conv-expand-btn {
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.conv-expand-btn:hover {
+  color: var(--primary);
 }
 
-.log-row {
-  border-left: 2px solid transparent;
+/* Tool pills (tier 3) */
+.tool-pill {
   transition: background 0.1s ease;
 }
-.log-row:hover { background: var(--bg-hover); }
-.log-row.tool-use {
-  background: var(--bg-surface);
-  border-left-color: var(--primary);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.dark .log-row.tool-use {
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
+.tool-pill:hover { background: var(--bg-hover); }
 
 .back-link {
   color: var(--text-secondary);
@@ -524,7 +534,50 @@ body {
 }
 .back-link:hover { color: var(--primary); }
 
-.view-header { border-bottom: 1px solid var(--border); }
+.view-header {
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 64px; /* below the main header (h-16 = 64px) */
+  z-index: 40;
+  background: var(--bg-page);
+  backdrop-filter: blur(8px);
+  background-color: color-mix(in srgb, var(--bg-page) 95%, transparent);
+}
+
+/* Back to top button */
+.back-to-top {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 60;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: var(--primary);
+  color: #FFFFFF;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(12px) scale(0.9);
+  transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.15s ease;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.35);
+}
+.back-to-top.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.back-to-top:hover {
+  box-shadow: 0 6px 20px rgba(217, 119, 6, 0.5);
+  transform: translateY(-1px) scale(1);
+}
+.back-to-top:active {
+  transform: translateY(0) scale(0.96);
+}
 
 /* Fade in animation */
 @keyframes fadeIn {
@@ -545,7 +598,7 @@ body {
     <h1 class="text-lg font-semibold tracking-tight font-sans">Q&A Retrospective</h1>
   </div>
   <div class="flex items-center gap-3">
-    <span class="text-xs font-mono" style="color: var(--text-muted);">
+    <span class="text-xs font-mono" style="color: var(--text-primary);">
       Analyzed ${viewModel.totalSessions} sessions across ${viewModel.totalProjects} projects — ${viewModel.qaSessionCount} contain Q&A
     </span>
     <button onclick="toggleTheme()" id="theme-toggle" class="flex items-center justify-center w-8 h-8 rounded-sm hover:opacity-80 transition-opacity" style="background: var(--bg-surface); border: 1px solid var(--border);" title="Toggle theme">
@@ -563,6 +616,11 @@ body {
 <div id="session-detail" class="flex-1 hidden"></div>
 
 </div>
+
+<!-- Back to top button -->
+<button id="back-to-top" class="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Back to top">
+  <span class="material-symbols-outlined" style="font-size: 20px;">arrow_upward</span>
+</button>
 
 <script>
 // ─── Embedded Data ──────────────────────────────────────────────────────────
@@ -586,6 +644,16 @@ ${generateClientJS()}
 
 function generateSessionListHTML(viewModel) {
   let html = '';
+
+  // Info disclaimer about session names
+  html += `
+    <div class="mb-8 pl-3 border-l-2" style="border-left-color: var(--primary);">
+      <p class="text-sm font-serif italic leading-relaxed" style="color: var(--text-secondary);">
+        Session names are randomly generated by Claude Code. Use <code class="font-mono text-xs px-1 py-0.5 rounded-sm" style="background: var(--bg-hover); color: var(--primary);">/rename</code> in any active session to give it a meaningful title.
+        <a href="https://code.claude.com/docs/en/interactive-mode#built-in-commands" target="_blank" rel="noopener" class="font-sans text-xs font-medium ml-1 no-underline hover:underline" style="color: var(--primary);">Docs <span style="display: inline-block; transform: rotate(-45deg);">&rarr;</span></a>
+      </p>
+    </div>`;
+
   const projectNames = Object.keys(viewModel.grouped).sort();
 
   for (const projectName of projectNames) {
@@ -704,6 +772,7 @@ function showSessionDetail(id) {
   detail.classList.remove('hidden');
   currentFilter = 'all';
   renderSessionDetail(session, detail);
+  applyTruncation();
 }
 
 // ─── Session Detail Rendering ─────────────────────────────────────────────
@@ -780,17 +849,7 @@ function renderTimeline(session, qaByToolUseId, answerByToolUseId) {
       const pair = qaByToolUseId[entry.toolUseId];
       if (pair && !renderedQAIds.has(entry.toolUseId)) {
         renderedQAIds.add(entry.toolUseId);
-        // Find what happened next
-        const answerIdx = timeline.findIndex((e, idx) => idx > i && e.type === 'user_answer' && e.toolUseId === entry.toolUseId);
-        const whatNext = [];
-        if (answerIdx >= 0) {
-          for (let j = answerIdx + 1; j < timeline.length && whatNext.length < 3; j++) {
-            if (timeline[j].type === 'assistant_text' || timeline[j].type === 'tool_use') {
-              whatNext.push(timeline[j]);
-            }
-          }
-        }
-        html += renderQACard(pair, whatNext, entry.timestamp);
+        html += renderQACard(pair, entry.timestamp);
       }
       continue;
     }
@@ -809,7 +868,7 @@ function renderTimeline(session, qaByToolUseId, answerByToolUseId) {
   return html;
 }
 
-function renderQACard(pair, whatNext, timestamp) {
+function renderQACard(pair, timestamp) {
   let html = '';
   html += '<div class="relative my-4 -mx-4 md:-mx-8 fade-in qa-card-wrapper">';
   html += '  <div class="absolute left-0 top-6 w-full h-px border-t border-dashed opacity-30" style="border-color: var(--primary);"></div>';
@@ -863,23 +922,7 @@ function renderQACard(pair, whatNext, timestamp) {
     html += '      </div>';
   }
 
-  // What Happened Next
-  if (whatNext && whatNext.length > 0) {
-    const whId = 'wh-' + Math.random().toString(36).slice(2, 8);
-    html += '      <div class="px-6 py-3 border-t" style="border-color: var(--border); background: var(--bg-surface);">';
-    html += '        <button onclick="toggleWhatNext(this, \\'' + whId + '\\')" class="flex items-center gap-2 text-xs font-sans font-medium transition-colors" style="color: var(--text-secondary);">';
-    html += '          <span class="material-symbols-outlined" style="font-size: 16px; transition: transform 0.2s;">expand_more</span>';
-    html += '          What happened next';
-    html += '        </button>';
-    html += '        <div id="' + whId + '" class="what-next-content mt-2">';
-    for (const entry of whatNext) {
-      html += renderTimelineEntry(entry);
-    }
-    html += '        </div>';
-    html += '      </div>';
-  }
-
-  // Copy JSON action — register data by ID to avoid quoting hell in attributes
+  // Copy JSON action
   const copyId = 'qa-' + Math.random().toString(36).slice(2, 10);
   qaRegistry[copyId] = { questions: pair.questions, answers: pair.answers };
   html += '      <div class="px-6 py-2 border-t flex items-center gap-4" style="border-color: var(--border); background: var(--bg-surface);">';
@@ -899,46 +942,52 @@ function renderQACard(pair, whatNext, timestamp) {
 function renderTimelineEntry(entry) {
   let html = '';
   const time = formatTime(entry.timestamp);
+  const TRUNCATE_THRESHOLD = 200;
 
-  if (entry.type === 'user_text') {
-    html += '<div class="log-row flex items-baseline gap-4 py-1.5 px-3 rounded-sm">';
-    html += '  <span class="w-16 flex-shrink-0 text-[11px] font-mono" style="color: var(--text-muted);">' + time + '</span>';
-    html += '  <div class="w-2 h-2 rounded-full mt-1.5" style="background: #3B82F6;"></div>';
-    html += '  <div class="flex-1 min-w-0">';
-    html += '    <span class="text-[11px] font-mono font-bold" style="color: #3B82F6;">User</span>';
-    html += '    <span class="text-[11px] font-mono ml-2 truncate block" style="color: var(--text-secondary);">' + esc(entry.content?.slice(0, 200)) + '</span>';
+  // ── Tier 2: Conversation entries (user + claude messages) ──
+  if (entry.type === 'user_text' || entry.type === 'assistant_text') {
+    const isUser = entry.type === 'user_text';
+    const label = isUser ? 'You' : 'Claude';
+    const color = isUser ? '#3B82F6' : '#8B5CF6';
+    const contentText = entry.content || '';
+    const needsTruncation = contentText.length > TRUNCATE_THRESHOLD;
+    const entryId = 'conv-' + Math.random().toString(36).slice(2, 8);
+
+    html += '<div class="conv-entry my-2 px-4 py-3">';
+    html += '  <div class="flex items-center gap-2 mb-1.5">';
+    html += '    <div class="w-2 h-2 rounded-full flex-shrink-0" style="background: ' + color + ';"></div>';
+    html += '    <span class="text-xs font-sans font-semibold" style="color: ' + color + ';">' + label + '</span>';
+    html += '    <span class="text-[11px] font-mono" style="color: var(--text-muted);">' + time + '</span>';
     html += '  </div>';
-    html += '</div>';
-  } else if (entry.type === 'assistant_text') {
-    html += '<div class="log-row flex items-baseline gap-4 py-1.5 px-3 rounded-sm">';
-    html += '  <span class="w-16 flex-shrink-0 text-[11px] font-mono" style="color: var(--text-muted);">' + time + '</span>';
-    html += '  <div class="w-2 h-2 rounded-full mt-1.5" style="background: #8B5CF6;"></div>';
-    html += '  <div class="flex-1 min-w-0">';
-    html += '    <span class="text-[11px] font-mono font-bold" style="color: #8B5CF6;">Claude</span>';
-    html += '    <span class="text-[11px] font-mono ml-2 truncate block" style="color: var(--text-secondary);">' + esc(entry.content?.slice(0, 200)) + '</span>';
+    html += '  <div id="' + entryId + '" class="conv-body pl-4 ml-0.5 border-l" style="border-color: color-mix(in srgb, ' + color + ' 20%, transparent);' + (needsTruncation ? '' : '') + '"' + (needsTruncation ? ' data-truncated="true"' : '') + '>';
+    html += '    <p class="text-sm font-serif leading-relaxed whitespace-pre-line" style="color: var(--text-secondary);">' + esc(contentText) + '</p>';
     html += '  </div>';
-    html += '</div>';
-  } else if (entry.type === 'tool_use') {
-    html += '<div class="log-row tool-use flex items-baseline gap-4 py-1.5 px-3 rounded-sm my-1">';
-    html += '  <span class="w-16 flex-shrink-0 text-[11px] font-mono font-medium" style="color: var(--text-muted);">' + time + '</span>';
-    html += '  <div class="w-2 h-2 rounded-full mt-1.5" style="background: var(--primary);"></div>';
-    html += '  <div class="flex flex-col min-w-0">';
-    html += '    <span class="text-[13px] font-mono tracking-tight" style="color: var(--text-primary);">';
-    html += '      <span class="font-bold" style="color: var(--primary);">Tool</span> · <span class="font-semibold">' + esc(entry.toolName) + '</span>';
-    html += '    </span>';
-    if (entry.content) {
-      html += '    <span class="text-[11px] font-mono truncate max-w-[400px]" style="color: var(--text-secondary);">' + esc(entry.content?.slice(0, 120)) + '</span>';
+    if (needsTruncation) {
+      html += '  <button onclick="toggleConvExpand(\\'' + entryId + '\\', this)" class="conv-expand-btn flex items-center gap-1 mt-1.5 pl-5 text-xs font-sans">';
+      html += '    <span class="material-symbols-outlined" style="font-size: 14px;">expand_more</span>';
+      html += '    Show more';
+      html += '  </button>';
     }
-    html += '  </div>';
     html += '</div>';
-  } else if (entry.type === 'tool_result') {
-    html += '<div class="log-row flex items-baseline gap-4 py-1.5 px-3 rounded-sm">';
-    html += '  <span class="w-16 flex-shrink-0 text-[11px] font-mono" style="color: var(--text-muted);">' + time + '</span>';
-    html += '  <div class="w-2 h-2 rounded-full mt-1.5" style="background: ' + (entry.isError ? '#EF4444' : '#10B981') + ';"></div>';
-    html += '  <span class="text-[11px] font-mono truncate" style="color: var(--text-secondary);">' + esc(entry.content?.slice(0, 120)) + '</span>';
-    html += '</div>';
+    return html;
   }
 
+  // ── Tier 3: Tool calls (compact pills) ──
+  if (entry.type === 'tool_use') {
+    html += '<div class="tool-pill flex items-center gap-3 py-1 px-4 rounded-sm">';
+    html += '  <span class="text-[10px] font-mono" style="color: var(--text-muted);">' + time + '</span>';
+    html += '  <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background: var(--primary); opacity: 0.6;"></div>';
+    html += '  <span class="text-[11px] font-mono truncate" style="color: var(--text-muted);">';
+    html += '    <span style="color: var(--primary); opacity: 0.8; font-weight: 600;">' + esc(entry.toolName) + '</span>';
+    if (entry.content) {
+      html += ' · ' + esc(entry.content?.slice(0, 80));
+    }
+    html += '  </span>';
+    html += '</div>';
+    return html;
+  }
+
+  // ── Tool results: skip (noise) ──
   return html;
 }
 
@@ -956,18 +1005,32 @@ function setFilter(mode) {
   const timelineEl = document.getElementById('timeline-content');
   if (timelineEl && session) {
     timelineEl.innerHTML = renderTimeline(session, qaByToolUseId, answerByToolUseId);
+    applyTruncation();
   }
 }
 
-function toggleWhatNext(btn, contentId) {
-  const content = document.getElementById(contentId);
-  if (!content) return;
-  const isExpanded = content.classList.contains('expanded');
-  content.classList.toggle('expanded');
-  const icon = btn.querySelector('.material-symbols-outlined');
-  if (icon) {
-    icon.style.transform = isExpanded ? '' : 'rotate(180deg)';
+function toggleConvExpand(entryId, btn) {
+  const el = document.getElementById(entryId);
+  if (!el) return;
+  const isTruncated = el.dataset.truncated === 'true';
+  if (isTruncated) {
+    el.classList.remove('truncated');
+    el.classList.add('expanded');
+    el.dataset.truncated = 'false';
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 14px;">expand_less</span> Show less';
+  } else {
+    el.classList.remove('expanded');
+    el.classList.add('truncated');
+    el.dataset.truncated = 'true';
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 14px;">expand_more</span> Show more';
   }
+}
+
+// Apply initial truncation after timeline renders
+function applyTruncation() {
+  document.querySelectorAll('.conv-body[data-truncated="true"]').forEach(el => {
+    el.classList.add('truncated');
+  });
 }
 
 function copyQAJSON(copyId) {
@@ -993,6 +1056,19 @@ function copyQAJSON(copyId) {
     document.body.removeChild(ta);
   });
 }
+
+// ─── Back to Top ──────────────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById('back-to-top');
+  if (!btn) return;
+  window.addEventListener('scroll', function() {
+    if (window.scrollY > 300) {
+      btn.classList.add('visible');
+    } else {
+      btn.classList.remove('visible');
+    }
+  }, { passive: true });
+})();
 
 // ─── Init ─────────────────────────────────────────────────────────────────
 initRouter();
