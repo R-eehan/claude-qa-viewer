@@ -36,14 +36,22 @@ function discoverSessionFiles() {
   return results;
 }
 
-function extractProjectName(dirName) {
-  // Convert "-Users-reehan-Desktop-ticket-summarizer" → "Ticket Summarizer"
-  const parts = dirName.split('-').filter(Boolean);
-  // Drop leading path segments (Users, username, Desktop, etc.)
-  const desktopIdx = parts.findIndex(p => p.toLowerCase() === 'desktop');
-  const meaningful = desktopIdx >= 0 ? parts.slice(desktopIdx + 1) : parts;
-  if (meaningful.length === 0) return dirName;
-  return meaningful.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+function extractProjectName(cwd, dirNameFallback) {
+  // Use the real cwd path to preserve actual directory names with hyphens
+  // e.g. "/Users/reehan/Desktop/context-transfer/portfolio-website" → "context-transfer/portfolio-website"
+  const source = cwd || dirNameFallback;
+  if (!source) return dirNameFallback;
+  const segments = source.split('/').filter(Boolean);
+  // Find a known parent folder and take everything after it
+  const knownParents = ['desktop', 'documents', 'projects', 'repos', 'src', 'code', 'dev', 'home', 'work'];
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (knownParents.includes(segments[i].toLowerCase())) {
+      const meaningful = segments.slice(i + 1);
+      if (meaningful.length > 0) return meaningful.join('/');
+    }
+  }
+  // Fallback: last 2 segments
+  return segments.length > 2 ? segments.slice(-2).join('/') : segments.join('/');
 }
 
 // ─── JSONL Parsing ───────────────────────────────────────────────────────────
@@ -183,7 +191,7 @@ function extractSessionMeta(parsedLines, fileInfo) {
   return {
     sessionId: fileInfo.sessionId,
     projectDir: fileInfo.projectDir,
-    projectName: extractProjectName(fileInfo.projectDir),
+    projectName: extractProjectName(cwd, fileInfo.projectDir),
     slug: slug || fileInfo.sessionId.slice(0, 8),
     cwd,
     startTime,
@@ -333,7 +341,7 @@ function generateHTML(viewModel) {
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Q&A Sessions — Claude Code Retrospective</title>
+<title>Claude Code Transcripts Retrospective</title>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet"/>
@@ -595,7 +603,7 @@ body {
 <header class="sticky top-0 z-50 flex items-center justify-between px-6 h-16 border-b backdrop-blur-sm" style="background: var(--bg-page); border-color: var(--border); background-color: color-mix(in srgb, var(--bg-page) 95%, transparent);">
   <div class="flex items-center gap-3">
     <span class="material-symbols-outlined opacity-80" style="font-size: 20px; color: var(--primary);">forum</span>
-    <h1 class="text-lg font-semibold tracking-tight font-sans">Q&A Retrospective</h1>
+    <h1 class="text-lg font-semibold tracking-tight font-sans">Claude Code Transcripts Retrospective</h1>
   </div>
   <div class="flex items-center gap-3">
     <span class="text-xs font-mono" style="color: var(--text-primary);">
@@ -654,7 +662,12 @@ function generateSessionListHTML(viewModel) {
       </p>
     </div>`;
 
-  const projectNames = Object.keys(viewModel.grouped).sort();
+  // Sort project groups by most recent session date (newest first)
+  const projectNames = Object.keys(viewModel.grouped).sort((a, b) => {
+    const aLatest = new Date(viewModel.grouped[a][0].meta.startTime);
+    const bLatest = new Date(viewModel.grouped[b][0].meta.startTime);
+    return bLatest - aLatest;
+  });
 
   for (const projectName of projectNames) {
     const sessions = viewModel.grouped[projectName];
