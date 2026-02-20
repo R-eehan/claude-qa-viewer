@@ -914,21 +914,32 @@ function renderQACard(pair, timestamp) {
     html += '        </div>';
 
     // Options as pills
+    let anyOptionSelected = false;
     if (question.options && question.options.length > 0) {
-      html += '        <div class="flex flex-wrap gap-2 mb-4">';
+      html += '        <div class="mb-4">';
+      html += '          <span class="text-[10px] font-mono uppercase tracking-widest mb-2 block" style="color: var(--text-muted);">Options</span>';
+      html += '          <div class="flex flex-wrap gap-2">';
       for (const opt of question.options) {
         const isSelected = answerText.toLowerCase().includes(opt.label.toLowerCase());
-        html += '          <span class="option-pill px-3 py-1 rounded-full text-xs font-sans' + (isSelected ? ' selected' : '') + '" title="' + esc(opt.description) + '">' + esc(opt.label) + '</span>';
+        if (isSelected) anyOptionSelected = true;
+        html += '            <span class="option-pill px-3 py-1 rounded-full text-xs font-sans' + (isSelected ? ' selected' : '') + '" title="' + esc(opt.description) + '">' + esc(opt.label) + '</span>';
       }
+      html += '          </div>';
       html += '        </div>';
     }
 
     // Answer
+    const isCustomResponse = question.options && question.options.length > 0 && !anyOptionSelected;
     html += '        <div class="relative pl-10">';
     html += '          <div class="absolute left-0 top-0 select-none" style="color: var(--primary); opacity: 0.2;">';
     html += '            <span class="font-serif text-4xl leading-none">A</span>';
     html += '          </div>';
-    html += '          <div class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-mono uppercase tracking-wider font-bold mb-2" style="background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary);">You Answered</div>';
+    html += '          <div class="inline-flex items-center gap-2 mb-2">';
+    html += '            <div class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-mono uppercase tracking-wider font-bold" style="background: color-mix(in srgb, var(--primary) 15%, transparent); color: var(--primary);">You Answered</div>';
+    if (isCustomResponse) {
+      html += '            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-mono uppercase tracking-wider" style="background: var(--bg-hover); color: var(--text-muted);">Custom response</span>';
+    }
+    html += '          </div>';
     html += '          <p class="font-serif text-base leading-relaxed" style="color: var(--text-primary);">' + esc(answerText) + '</p>';
     html += '        </div>';
 
