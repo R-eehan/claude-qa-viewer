@@ -341,7 +341,7 @@ function generateHTML(viewModel) {
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Claude Code Transcripts Retrospective</title>
+<title>Claude Code Q&A - A Retrospective</title>
 <link href="https://fonts.googleapis.com" rel="preconnect"/>
 <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet"/>
@@ -603,7 +603,7 @@ body {
 <header class="sticky top-0 z-50 flex items-center justify-between px-6 h-16 border-b backdrop-blur-sm" style="background: var(--bg-page); border-color: var(--border); background-color: color-mix(in srgb, var(--bg-page) 95%, transparent);">
   <div class="flex items-center gap-3">
     <span class="material-symbols-outlined opacity-80" style="font-size: 20px; color: var(--primary);">forum</span>
-    <h1 class="text-lg font-semibold tracking-tight font-sans">Claude Code Transcripts Retrospective</h1>
+    <h1 class="text-lg font-semibold tracking-tight font-sans">Claude Code Q&A - A Retrospective</h1>
   </div>
   <div class="flex items-center gap-3">
     <span class="text-xs font-mono" style="color: var(--text-primary);">
@@ -638,7 +638,7 @@ const SESSION_DATA = ${JSON.stringify(viewModel.sessions.map(s => ({
   projectName: s.meta.projectName,
   startTime: s.meta.startTime,
   firstUserMessage: s.meta.firstUserMessage,
-  cwd: s.meta.cwd,
+  cwd: shortenHome(s.meta.cwd),
   qaCount: s.qaPairs.length,
   qaPairs: s.qaPairs,
   timeline: s.timeline,
@@ -826,9 +826,20 @@ function renderSessionDetail(session, container) {
   html += '  <div class="mt-2 flex items-center gap-3 text-xs font-mono" style="color: var(--text-muted);">';
   html += '    <span>' + formatDate(session.startTime) + '</span>';
   html += '    <span>·</span>';
-  html += '    <span>' + esc(session.projectName) + '</span>';
-  html += '    <span>·</span>';
   html += '    <span>' + esc(session.cwd) + '</span>';
+  html += '  </div>';
+  // Session ID + rename hint
+  html += '  <div class="mt-2 flex items-center gap-2 text-xs font-mono" style="color: var(--text-muted);">';
+  html += '    <span style="color: var(--text-muted); opacity: 0.7;">Session ID:</span>';
+  html += '    <code class="px-1.5 py-0.5 rounded-sm select-all" style="background: var(--bg-hover); color: var(--text-secondary);">' + esc(session.id) + '</code>';
+  html += '    <button onclick="copyText(\\'' + esc(session.id) + '\\')" class="flex items-center gap-1 transition-colors hover:opacity-80" style="color: var(--text-muted);" title="Copy session ID">';
+  html += '      <span class="material-symbols-outlined" style="font-size: 14px;">content_copy</span>';
+  html += '    </button>';
+  html += '    <span style="opacity: 0.4;">|</span>';
+  html += '    <span style="color: var(--text-muted); opacity: 0.7;">Rename:</span>';
+  html += '    <code class="px-1.5 py-0.5 rounded-sm" style="background: var(--bg-hover); color: var(--text-secondary);">claude --resume ' + esc(session.id.slice(0, 8)) + '…</code>';
+  html += '    <span style="color: var(--text-muted);">→</span>';
+  html += '    <code class="px-1.5 py-0.5 rounded-sm" style="background: var(--bg-hover); color: var(--primary);">/rename</code>';
   html += '  </div>';
   html += '</div>';
 
@@ -1081,6 +1092,27 @@ function copyQAJSON(copyId) {
   });
 }
 
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    // Brief visual feedback — find the button that triggered this
+    const btns = document.querySelectorAll('button[onclick*="copyText"]');
+    btns.forEach(btn => {
+      const icon = btn.querySelector('.material-symbols-outlined');
+      if (icon && icon.textContent === 'content_copy') {
+        icon.textContent = 'check';
+        setTimeout(() => { icon.textContent = 'content_copy'; }, 1500);
+      }
+    });
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+}
+
 // ─── Back to Top ──────────────────────────────────────────────────────────
 (function() {
   const btn = document.getElementById('back-to-top');
@@ -1097,6 +1129,17 @@ function copyQAJSON(copyId) {
 // ─── Init ─────────────────────────────────────────────────────────────────
 initRouter();
 `;
+}
+
+// ─── Server-side Helpers ────────────────────────────────────────────────────
+
+function shortenHome(cwdPath) {
+  if (!cwdPath) return '';
+  const home = os.homedir();
+  if (cwdPath.startsWith(home)) {
+    return '~' + cwdPath.slice(home.length);
+  }
+  return cwdPath;
 }
 
 // ─── Server-side HTML Escaping ──────────────────────────────────────────────
