@@ -163,6 +163,7 @@ function parseAnswersFromContent(contentStr, questions) {
 
 function extractSessionMeta(parsedLines, fileInfo) {
   let slug = '';
+  let customTitle = '';
   let cwd = '';
   let startTime = '';
   let firstUserMessage = '';
@@ -171,6 +172,9 @@ function extractSessionMeta(parsedLines, fileInfo) {
     if (!startTime && entry.timestamp) startTime = entry.timestamp;
     if (!slug && entry.slug) slug = entry.slug;
     if (!cwd && entry.cwd) cwd = entry.cwd;
+    if (entry.type === 'custom-title' && entry.customTitle) {
+      customTitle = entry.customTitle;
+    }
     if (!firstUserMessage && entry.type === 'user') {
       const msg = entry.message;
       let candidate = '';
@@ -185,14 +189,14 @@ function extractSessionMeta(parsedLines, fileInfo) {
         firstUserMessage = candidate;
       }
     }
-    if (slug && cwd && startTime && firstUserMessage) break;
   }
 
   return {
     sessionId: fileInfo.sessionId,
     projectDir: fileInfo.projectDir,
     projectName: extractProjectName(cwd, fileInfo.projectDir),
-    slug: slug || fileInfo.sessionId.slice(0, 8),
+    slug: customTitle || slug || fileInfo.sessionId.slice(0, 8),
+    isRenamed: !!customTitle,
     cwd,
     startTime,
     firstUserMessage: stripTags(firstUserMessage).slice(0, 300),
